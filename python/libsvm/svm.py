@@ -1,27 +1,25 @@
-#!/usr/bin/env python
-
 from ctypes import *
 from ctypes.util import find_library
 from os import path
 from glob import glob
+from enum import IntEnum
 import sys
 
 try:
+    import numpy as np
     import scipy
     from scipy import sparse
 except:
     scipy = None
-    sparse = None
+
 
 if sys.version_info[0] < 3:
     range = xrange
     from itertools import izip as zip
 
 __all__ = ['libsvm', 'svm_problem', 'svm_parameter',
-           'toPyModel', 'gen_svm_nodearray', 'print_null', 'svm_node', 'C_SVC',
-           'EPSILON_SVR', 'LINEAR', 'NU_SVC', 'NU_SVR', 'ONE_CLASS',
-           'POLY', 'PRECOMPUTED', 'PRINT_STRING_FUN', 'RBF',
-           'SIGMOID', 'c_double', 'svm_model']
+           'toPyModel', 'gen_svm_nodearray', 'print_null', 'svm_node', 'svm_forms',
+            'PRINT_STRING_FUN', 'kernel_names', 'c_double', 'svm_model']
 
 try:
     dirname = path.dirname(path.abspath(__file__))
@@ -33,7 +31,7 @@ except:
         if sys.platform == 'win32':
             libsvm = CDLL(path.join(dirname, r'..\..\windows\libsvm.dll'))
         else:
-            libsvm = CDLL(path.join(dirname, '../../libsvm.so.2'))
+            libsvm = CDLL(path.join(dirname, '../../libsvm.so.4'))
     except:
     # For unix the prefix 'lib' is not considered.
         if find_library('svm'):
@@ -43,21 +41,31 @@ except:
         else:
             raise Exception('LIBSVM library not found.')
 
-C_SVC = 0
-NU_SVC = 1
-ONE_CLASS = 2
-EPSILON_SVR = 3
-NU_SVR = 4
+class svm_forms(IntEnum):
+    C_SVC = 0
+    NU_SVC = 1
+    ONE_CLASS = 2
+    EPSILON_SVR = 3
+    NU_SVR = 4
 
-LINEAR = 0
-POLY = 1
-RBF = 2
-SIGMOID = 3
-PRECOMPUTED = 4
+class kernel_names(IntEnum):
+    LINEAR = 0
+    POLY = 1
+    RBF = 2
+    SIGMOID = 3
+    PRECOMPUTED = 4
 
 PRINT_STRING_FUN = CFUNCTYPE(None, c_char_p)
 def print_null(s):
     return
+
+# In multi-threading, all threads share the same memory space of
+# the dynamic library (libsvm). Thus, we use a module-level
+# variable to keep a reference to ctypes print_null, preventing
+# python from garbage collecting it in thread B while thread A
+# still needs it. Check the usage of svm_set_print_string_function()
+# in LIBSVM README for details.
+ctypes_print_null = PRINT_STRING_FUN(print_null)
 
 def genFields(names, types):
     return list(zip(names, types))
@@ -83,24 +91,24 @@ def gen_svm_nodearray(xi, feature_max=None, isKernel=False):
 
     xi_shift = 0 # ensure correct indices of xi
     if scipy and isinstance(xi, tuple) and len(xi) == 2\
-            and isinstance(xi[0], scipy.ndarray) and isinstance(xi[1], scipy.ndarray): # for a sparse vector
+            and isinstance(xi[0], np.ndarray) and isinstance(xi[1], np.ndarray): # for a sparse vector
         if not isKernel:
             index_range = xi[0] + 1 # index starts from 1
         else:
             index_range = xi[0] # index starts from 0 for precomputed kernel
         if feature_max:
-            index_range = index_range[scipy.where(index_range <= feature_max)]
-    elif scipy and isinstance(xi, scipy.ndarray):
+            index_range = index_range[np.where(index_range <= feature_max)]
+    elif scipy and isinstance(xi, np.ndarray):
         if not isKernel:
             xi_shift = 1
             index_range = xi.nonzero()[0] + 1 # index starts from 1
         else:
-            index_range = scipy.arange(0, len(xi)) # index starts from 0 for precomputed kernel
+            index_range = np.arange(0, len(xi)) # index starts from 0 for precomputed kernel
         if feature_max:
-            index_range = index_range[scipy.where(index_range <= feature_max)]
+            index_range = index_range[np.where(index_range <= feature_max)]
     elif isinstance(xi, (dict, list, tuple)):
         if isinstance(xi, dict):
-            index_range = xi.keys()
+            index_range = sorted(xi.keys())
         elif isinstance(xi, (list, tuple)):
             if not isKernel:
                 xi_shift = 1
@@ -109,11 +117,9 @@ def gen_svm_nodearray(xi, feature_max=None, isKernel=False):
                 index_range = range(0, len(xi)) # index starts from 0 for precomputed kernel
 
         if feature_max:
-            index_range = filter(lambda j: j <= feature_max, index_range)
+            index_range = list(filter(lambda j: j <= feature_max, index_range))
         if not isKernel:
-            index_range = filter(lambda j:xi[j-xi_shift] != 0, index_range)
-
-        index_range = sorted(index_range)
+            index_range = list(filter(lambda j:xi[j-xi_shift] != 0, index_range))
     else:
         raise TypeError('xi should be a dictionary, list, tuple, 1-d numpy array, or tuple of (index, data)')
 
@@ -121,10 +127,11 @@ def gen_svm_nodearray(xi, feature_max=None, isKernel=False):
     ret[-1].index = -1
 
     if scipy and isinstance(xi, tuple) and len(xi) == 2\
-            and isinstance(xi[0], scipy.ndarray) and isinstance(xi[1], scipy.ndarray): # for a sparse vector
-        for idx, j in enumerate(index_range):
-            ret[idx].index = j
-            ret[idx].value = (xi[1])[idx]
+            and isinstance(xi[0], np.ndarray) and isinstance(xi[1], np.ndarray): # for a sparse vector
+        # since xi=(indices, values), we must sort them simultaneously.
+        for idx, arg in enumerate(np.argsort(index_range)):
+            ret[idx].index = index_range[arg]
+            ret[idx].value = (xi[1])[arg]
     else:
         for idx, j in enumerate(index_range):
             ret[idx].index = j
@@ -139,10 +146,18 @@ try:
     from numba import jit
     jit_enabled = True
 except:
-    jit = lambda x: x
+    # We need to support two cases: when jit is called with no arguments, and when jit is called with
+    # a keyword argument.
+    def jit(func=None, *args, **kwargs):
+        if func is None:
+            # This handles the case where jit is used with parentheses: @jit(nopython=True)
+            return lambda x: x
+        else:
+            # This handles the case where jit is used without parentheses: @jit
+            return func
     jit_enabled = False
 
-@jit
+@jit(nopython=True)
 def csr_to_problem_jit(l, x_val, x_ind, x_rowptr, prob_val, prob_ind, prob_rowptr, indx_start):
     for i in range(l):
         b1,e1 = x_rowptr[i], x_rowptr[i+1]
@@ -162,9 +177,11 @@ def csr_to_problem(x, prob, isKernel):
         x.sort_indices()
 
     # Extra space for termination node and (possibly) bias term
-    x_space = prob.x_space = scipy.empty((x.nnz+x.shape[0]), dtype=svm_node)
-    prob.rowptr = x.indptr.copy()
-    prob.rowptr[1:] += scipy.arange(1,x.shape[0]+1)
+    x_space = prob.x_space = np.empty((x.nnz+x.shape[0]), dtype=svm_node)
+    # rowptr has to be a 64bit integer because it will later be used for pointer arithmetic,
+    # which overflows when the added pointer points to an address that is numerically high.
+    prob.rowptr = x.indptr.astype(np.int64, copy=True)
+    prob.rowptr[1:] += np.arange(1,x.shape[0]+1)
     prob_ind = x_space["index"]
     prob_val = x_space["value"]
     prob_ind[:] = -1
@@ -183,17 +200,17 @@ class svm_problem(Structure):
     _fields_ = genFields(_names, _types)
 
     def __init__(self, y, x, isKernel=False):
-        if (not isinstance(y, (list, tuple))) and (not (scipy and isinstance(y, scipy.ndarray))):
+        if (not isinstance(y, (list, tuple))) and (not (scipy and isinstance(y, np.ndarray))):
             raise TypeError("type of y: {0} is not supported!".format(type(y)))
 
         if isinstance(x, (list, tuple)):
             if len(y) != len(x):
                 raise ValueError("len(y) != len(x)")
-        elif scipy != None and isinstance(x, (scipy.ndarray, sparse.spmatrix)):
+        elif scipy != None and isinstance(x, (np.ndarray, sparse.spmatrix)):
             if len(y) != x.shape[0]:
                 raise ValueError("len(y) != len(x)")
-            if isinstance(x, scipy.ndarray):
-                x = scipy.ascontiguousarray(x) # enforce row-major
+            if isinstance(x, np.ndarray):
+                x = np.ascontiguousarray(x) # enforce row-major
             if isinstance(x, sparse.spmatrix):
                 x = x.tocsr()
                 pass
@@ -214,8 +231,8 @@ class svm_problem(Structure):
         self.n = max_idx
 
         self.y = (c_double * l)()
-        if scipy != None and isinstance(y, scipy.ndarray):
-            scipy.ctypeslib.as_array(self.y, (self.l,))[:] = y
+        if scipy != None and isinstance(y, np.ndarray):
+            np.ctypeslib.as_array(self.y, (self.l,))[:] = y
         else:
             for i, yi in enumerate(y): self.y[i] = yi
 
@@ -223,7 +240,7 @@ class svm_problem(Structure):
         if scipy != None and isinstance(x, sparse.csr_matrix):
             base = addressof(self.x_space.ctypes.data_as(POINTER(svm_node))[0])
             x_ptr = cast(self.x, POINTER(c_uint64))
-            x_ptr = scipy.ctypeslib.as_array(x_ptr,(self.l,))
+            x_ptr = np.ctypeslib.as_array(x_ptr,(self.l,))
             x_ptr[:] = self.rowptr[:-1]*sizeof(svm_node)+base
         else:
             for i, xi in enumerate(self.x_space): self.x[i] = xi
@@ -253,8 +270,8 @@ class svm_parameter(Structure):
         return s
 
     def set_to_default_values(self):
-        self.svm_type = C_SVC;
-        self.kernel_type = RBF
+        self.svm_type = svm_forms.C_SVC;
+        self.kernel_type = kernel_names.RBF
         self.degree = 3
         self.gamma = 0
         self.coef0 = 0
@@ -288,10 +305,10 @@ class svm_parameter(Structure):
         while i < len(argv):
             if argv[i] == "-s":
                 i = i + 1
-                self.svm_type = int(argv[i])
+                self.svm_type = svm_forms(int(argv[i]))
             elif argv[i] == "-t":
                 i = i + 1
-                self.kernel_type = int(argv[i])
+                self.kernel_type = kernel_names(int(argv[i]))
             elif argv[i] == "-d":
                 i = i + 1
                 self.degree = int(argv[i])
@@ -323,7 +340,7 @@ class svm_parameter(Structure):
                 i = i + 1
                 self.probability = int(argv[i])
             elif argv[i] == "-q":
-                self.print_func = PRINT_STRING_FUN(print_null)
+                self.print_func = ctypes_print_null
             elif argv[i] == "-v":
                 i = i + 1
                 self.cross_validation = 1
@@ -348,11 +365,12 @@ class svm_parameter(Structure):
 
 class svm_model(Structure):
     _names = ['param', 'nr_class', 'l', 'SV', 'sv_coef', 'rho',
-            'probA', 'probB', 'sv_indices', 'label', 'nSV', 'free_sv']
+            'probA', 'probB', 'prob_density_marks', 'sv_indices',
+            'label', 'nSV', 'free_sv']
     _types = [svm_parameter, c_int, c_int, POINTER(POINTER(svm_node)),
             POINTER(POINTER(c_double)), POINTER(c_double),
-            POINTER(c_double), POINTER(c_double), POINTER(c_int),
-            POINTER(c_int), POINTER(c_int), c_int]
+            POINTER(c_double), POINTER(c_double), POINTER(c_double),
+            POINTER(c_int), POINTER(c_int), POINTER(c_int), c_int]
     _fields_ = genFields(_names, _types)
 
     def __init__(self):

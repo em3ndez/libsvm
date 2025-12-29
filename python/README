@@ -95,7 +95,7 @@ interface.
 # Read data in LIBSVM format
 >>> y, x = svm_read_problem('../heart_scale')
 >>> m = svm_train(y[:200], x[:200], '-c 4')
->>> p_label, p_acc, p_val = svm_predict(y[200:], x[200:], m)
+>>> pred_labels, pred_metrics, pred_values = svm_predict(y[200:], x[200:], m)
 
 # Construct problem in python format
 # Dense data
@@ -121,8 +121,8 @@ interface.
 # Other utility functions
 >>> svm_save_model('heart_scale.model', m)
 >>> m = svm_load_model('heart_scale.model')
->>> p_label, p_acc, p_val = svm_predict(y, x, m, '-b 1')
->>> ACC, MSE, SCC = evaluations(y, p_label)
+>>> pred_labels, pred_metrics, pred_values = svm_predict(y, x, m, '-b 1')
+>>> ACC, MSE, SCC = evaluations(y, pred_labels)
 
 # Getting online help
 >>> help(svm_train)
@@ -148,27 +148,28 @@ If numba (http://numba.pydata.org) is installed, some operations will be much fa
 There are two levels of usage. The high-level one uses utility functions
 in svmutil.py and the usage is the same as the LIBSVM MATLAB interface.
 
+>>> import numpy as np
 >>> import scipy
 >>> from libsvm.svmutil import *
 # Read data in LIBSVM format
 >>> y, x = svm_read_problem('../heart_scale', return_scipy = True) # y: ndarray, x: csr_matrix
 >>> m = svm_train(y[:200], x[:200, :], '-c 4')
->>> p_label, p_acc, p_val = svm_predict(y[200:], x[200:, :], m)
+>>> pred_labels, pred_metrics, pred_values = svm_predict(y[200:], x[200:, :], m)
 
 # Construct problem in Scipy format
 # Dense data: numpy ndarray
->>> y, x = scipy.asarray([1,-1]), scipy.asarray([[1,0,1], [-1,0,-1]])
+>>> y, x = np.asarray([1,-1]), np.asarray([[1,0,1], [-1,0,-1]])
 # Sparse data: scipy csr_matrix((data, (row_ind, col_ind))
->>> y, x = scipy.asarray([1,-1]), scipy.sparse.csr_matrix(([1, 1, -1, -1], ([0, 0, 1, 1], [0, 2, 0, 2])))
+>>> y, x = np.asarray([1,-1]), scipy.sparse.csr_matrix(([1, 1, -1, -1], ([0, 0, 1, 1], [0, 2, 0, 2])))
 >>> prob  = svm_problem(y, x)
 >>> param = svm_parameter('-t 0 -c 4 -b 1')
 >>> m = svm_train(prob, param)
 
 # Precomputed kernel data (-t 4)
 # Dense data: numpy ndarray
->>> y, x = scipy.asarray([1,-1]), scipy.asarray([[1,2,-2], [2,-2,2]])
+>>> y, x = np.asarray([1,-1]), np.asarray([[1,2,-2], [2,-2,2]])
 # Sparse data: scipy csr_matrix((data, (row_ind, col_ind))
->>> y, x = scipy.asarray([1,-1]), scipy.sparse.csr_matrix(([1, 2, -2, 2, -2, 2], ([0, 0, 0, 1, 1, 1], [0, 1, 2, 0, 1, 2])))
+>>> y, x = np.asarray([1,-1]), scipy.sparse.csr_matrix(([1, 2, -2, 2, -2, 2], ([0, 0, 0, 1, 1, 1], [0, 1, 2, 0, 1, 2])))
 # isKernel=True must be set for precomputed kernel
 >>> prob  = svm_problem(y, x, isKernel=True)
 >>> param = svm_parameter('-t 4 -c 4 -b 1')
@@ -183,8 +184,8 @@ in svmutil.py and the usage is the same as the LIBSVM MATLAB interface.
 # Other utility functions
 >>> svm_save_model('heart_scale.model', m)
 >>> m = svm_load_model('heart_scale.model')
->>> p_label, p_acc, p_val = svm_predict(y, x, m, '-b 1')
->>> ACC, MSE, SCC = evaluations(y, p_label)
+>>> pred_labels, pred_metrics, pred_values = svm_predict(y, x, m, '-b 1')
+>>> ACC, MSE, SCC = evaluations(y, pred_labels)
 
 # Getting online help
 >>> help(svm_train)
@@ -194,12 +195,12 @@ all arguments and return values are in ctypes format. You need to handle them
 carefully.
 
 >>> from libsvm.svm import *
->>> prob = svm_problem(scipy.asarray([1,-1]), scipy.sparse.csr_matrix(([1, 1, -1, -1], ([0, 0, 1, 1], [0, 2, 0, 2]))))
+>>> prob = svm_problem(np.asarray([1,-1]), scipy.sparse.csr_matrix(([1, 1, -1, -1], ([0, 0, 1, 1], [0, 2, 0, 2]))))
 >>> param = svm_parameter('-c 4')
 >>> m = libsvm.svm_train(prob, param) # m is a ctype pointer to an svm_model
 # Convert a tuple of ndarray (index, data) to feature_nodearray, a ctypes structure
 # Note that index starts from 0, though the following example will be changed to 1:1, 3:1 internally
->>> x0, max_idx = gen_svm_nodearray((scipy.asarray([0,2]), scipy.asarray([1,1])))
+>>> x0, max_idx = gen_svm_nodearray((np.asarray([0,2]), np.asarray([1,1])))
 >>> label = libsvm.svm_predict(m, x0)
 
 Design Description
@@ -347,7 +348,7 @@ To use utility functions, type
 The above command loads
     svm_train()            : train an SVM model
     svm_predict()          : predict testing data
-    svm_read_problem()     : read the data from a LIBSVM-format file.
+    svm_read_problem()     : read the data from a LIBSVM-format file or object.
     svm_load_model()       : load a LIBSVM model.
     svm_save_model()       : save model to a file.
     evaluations()          : evaluate prediction results.
@@ -402,7 +403,7 @@ The above command loads
 
     To predict testing data with a model, use
 
-    >>> p_labs, p_acc, p_vals = svm_predict(y, x, model [,'predicting_options'])
+    >>> pred_labels, pred_metrics, pred_values = svm_predict(y, x, model [,'predicting_options'])
 
     y: a list/tuple/ndarray of l true labels (type must be int/double).
        It is used for calculating the accuracy. Use [] if true labels are
@@ -418,13 +419,13 @@ The above command loads
 
     model: an svm_model instance.
 
-    p_labels: a list of predicted labels
+    pred_labels: a list of predicted labels
 
-    p_acc: a tuple including accuracy (for classification), mean
+    pred_metrics: a tuple of metrics including accuracy (for classification), mean
            squared error, and squared correlation coefficient (for
            regression).
 
-    p_vals: a list of decision values or probability estimates (if '-b 1'
+    pred_values: a list of decision values or probability estimates (if '-b 1'
             is specified). If k is the number of classes in training data,
             for decision values, each element includes results of predicting
             k(k-1)/2 binary-class SVMs. For classification, k = 1 is a
@@ -432,19 +433,39 @@ The above command loads
             instance, instead of an empty list.
             For probabilities, each element contains k values indicating
             the probability that the testing instance is in each class.
+            For one-class SVM, the list has two elements indicating the
+            probabilities of normal instance/outlier.
             Note that the order of classes is the same as the 'model.label'
             field in the model structure.
 
     Example:
 
     >>> m = svm_train(y, x, '-c 5')
-    >>> p_labels, p_acc, p_vals = svm_predict(y, x, m)
+    >>> pred_labels, pred_metrics, pred_values = svm_predict(y, x, m)
 
-- Functions: svm_read_problem/svm_load_model/svm_save_model
+- Function: svm_read_problem
+
+    Read the data from a LIBSVM-format file or object.
+
+    # Read the data from a file path
+    >>> y, x = svm_read_problem('data.txt')
+
+    # Read the data from an object created from an url
+    >>> import urllib.request
+    >>> import bz2
+    >>> url = 'https://www.csie.ntu.edu.tw/~cjlin/libsvmtools/datasets/binary/leu.bz2'
+    >>> with urllib.request.urlopen(url) as r:
+    >>>     with bz2.open(r, 'rt') as f:
+    >>>         y, x = svm_read_problem(f)
+
+    Note that we must convert the file object to text mode before
+    passing it to svm_read_problem() as we do not support binary
+    mode.
+
+- Functions: svm_load_model/svm_save_model
 
     See the usage by examples:
 
-    >>> y, x = svm_read_problem('data.txt')
     >>> m = svm_load_model('model_file')
     >>> svm_save_model('model_file', m)
 

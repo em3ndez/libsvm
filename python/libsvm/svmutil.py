@@ -1,12 +1,16 @@
-#!/usr/bin/env python
-
 import os, sys
-sys.path = [os.path.dirname(os.path.abspath(__file__))] + sys.path
 from .svm import *
 from .svm import __all__ as svm_all
-from .svm import scipy, sparse
 from .commonutil import *
 from .commonutil import __all__ as common_all
+
+try:
+    import numpy as np
+    import scipy
+    from scipy import sparse
+except:
+    scipy = None
+
 
 if sys.version_info[0] < 3:
     range = xrange
@@ -79,17 +83,17 @@ def svm_train(arg1, arg2=None, arg3=None):
         -m cachesize : set cache memory size in MB (default 100)
         -e epsilon : set tolerance of termination criterion (default 0.001)
         -h shrinking : whether to use the shrinking heuristics, 0 or 1 (default 1)
-        -b probability_estimates : whether to train a SVC or SVR model for probability estimates, 0 or 1 (default 0)
+        -b probability_estimates : whether to train a model for probability estimates, 0 or 1 (default 0)
         -wi weight : set the parameter C of class i to weight*C, for C-SVC (default 1)
         -v n: n-fold cross validation mode
         -q : quiet mode (no outputs)
     """
     prob, param = None, None
-    if isinstance(arg1, (list, tuple)) or (scipy and isinstance(arg1, scipy.ndarray)):
-        assert isinstance(arg2, (list, tuple)) or (scipy and isinstance(arg2, (scipy.ndarray, sparse.spmatrix)))
+    if isinstance(arg1, (list, tuple)) or (scipy and isinstance(arg1, np.ndarray)):
+        assert isinstance(arg2, (list, tuple)) or (scipy and isinstance(arg2, (np.ndarray, sparse.spmatrix)))
         y, x, options = arg1, arg2, arg3
         param = svm_parameter(options)
-        prob = svm_problem(y, x, isKernel=(param.kernel_type == PRECOMPUTED))
+        prob = svm_problem(y, x, isKernel=(param.kernel_type == kernel_names.PRECOMPUTED))
     elif isinstance(arg1, svm_problem):
         prob = arg1
         if isinstance(arg2, svm_parameter):
@@ -99,7 +103,7 @@ def svm_train(arg1, arg2=None, arg3=None):
     if prob == None or param == None:
         raise TypeError("Wrong types for the arguments")
 
-    if param.kernel_type == PRECOMPUTED:
+    if param.kernel_type == kernel_names.PRECOMPUTED:
         for i in range(prob.l):
             xi = prob.x[i]
             idx, val = xi[0].index, xi[0].value
@@ -120,7 +124,7 @@ def svm_train(arg1, arg2=None, arg3=None):
         target = (c_double * l)()
         libsvm.svm_cross_validation(prob, param, nr_fold, target)
         ACC, MSE, SCC = evaluations(prob.y[:l], target[:l])
-        if param.svm_type in [EPSILON_SVR, NU_SVR]:
+        if param.svm_type in [svm_forms.EPSILON_SVR, svm_forms.NU_SVR]:
             print("Cross Validation Mean squared error = %g" % MSE)
             print("Cross Validation Squared correlation coefficient = %g" % SCC)
             return MSE
@@ -137,7 +141,7 @@ def svm_train(arg1, arg2=None, arg3=None):
 
 def svm_predict(y, x, m, options=""):
     """
-    svm_predict(y, x, m [, options]) -> (p_labels, p_acc, p_vals)
+    svm_predict(y, x, m [, options]) -> (pred_labels, pred_metrics, pred_values)
 
     y: a list/tuple/ndarray of l true labels (type must be int/double).
        It is used for calculating the accuracy. Use [] if true labels are
@@ -151,14 +155,14 @@ def svm_predict(y, x, m, options=""):
     Predict data (y, x) with the SVM model m.
     options:
         -b probability_estimates: whether to predict probability estimates,
-            0 or 1 (default 0); for one-class SVM only 0 is supported.
+            0 or 1 (default 0).
         -q : quiet mode (no outputs).
 
     The return tuple contains
-    p_labels: a list of predicted labels
-    p_acc: a tuple including  accuracy (for classification), mean-squared
+    pred_labels: a list of predicted labels
+    pred_metrics: a tuple of metrics including  accuracy (for classification), mean-squared
            error, and squared correlation coefficient (for regression).
-    p_vals: a list of decision values or probability estimates (if '-b 1'
+    pred_values: a list of decision values or probability estimates (if '-b 1'
             is specified). If k is the number of classes, for decision values,
             each element includes results of predicting k(k-1)/2 binary-class
             SVMs. For probabilities, each element contains k values indicating
@@ -170,14 +174,14 @@ def svm_predict(y, x, m, options=""):
     def info(s):
         print(s)
 
-    if scipy and isinstance(x, scipy.ndarray):
-        x = scipy.ascontiguousarray(x) # enforce row-major
-    elif sparse and isinstance(x, sparse.spmatrix):
+    if scipy and isinstance(x, np.ndarray):
+        x = np.ascontiguousarray(x) # enforce row-major
+    elif scipy and isinstance(x, sparse.spmatrix):
         x = x.tocsr()
     elif not isinstance(x, (list, tuple)):
         raise TypeError("type of x: {0} is not supported!".format(type(x)))
 
-    if (not isinstance(y, (list, tuple))) and (not (scipy and isinstance(y, scipy.ndarray))):
+    if (not isinstance(y, (list, tuple))) and (not (scipy and isinstance(y, np.ndarray))):
         raise TypeError("type of y: {0} is not supported!".format(type(y)))
 
     predict_probability = 0
@@ -208,7 +212,7 @@ def svm_predict(y, x, m, options=""):
         if not is_prob_model:
             raise ValueError("Model does not support probabiliy estimates")
 
-        if svm_type in [NU_SVR, EPSILON_SVR]:
+        if svm_type in [svm_forms.NU_SVR, svm_forms.EPSILON_SVR]:
             info("Prob. model for test data: target value = predicted value + z,\n"
             "z: Laplace distribution e^(-|z|/sigma)/(2sigma),sigma=%g" % m.get_svr_probability());
             nr_class = 0
@@ -217,9 +221,9 @@ def svm_predict(y, x, m, options=""):
         for i in range(nr_instance):
             if scipy and isinstance(x, sparse.spmatrix):
                 indslice = slice(x.indptr[i], x.indptr[i+1])
-                xi, idx = gen_svm_nodearray((x.indices[indslice], x.data[indslice]), isKernel=(m.param.kernel_type == PRECOMPUTED))
+                xi, idx = gen_svm_nodearray((x.indices[indslice], x.data[indslice]), isKernel=(m.param.kernel_type == kernel_names.PRECOMPUTED))
             else:
-                xi, idx = gen_svm_nodearray(x[i], isKernel=(m.param.kernel_type == PRECOMPUTED))
+                xi, idx = gen_svm_nodearray(x[i], isKernel=(m.param.kernel_type == kernel_names.PRECOMPUTED))
             label = libsvm.svm_predict_probability(m, xi, prob_estimates)
             values = prob_estimates[:nr_class]
             pred_labels += [label]
@@ -227,7 +231,7 @@ def svm_predict(y, x, m, options=""):
     else:
         if is_prob_model:
             info("Model supports probability estimates, but disabled in predicton.")
-        if svm_type in (ONE_CLASS, EPSILON_SVR, NU_SVC):
+        if svm_type in [svm_forms.ONE_CLASS, svm_forms.EPSILON_SVR, svm_forms.NU_SVC]:
             nr_classifier = 1
         else:
             nr_classifier = nr_class*(nr_class-1)//2
@@ -235,9 +239,9 @@ def svm_predict(y, x, m, options=""):
         for i in range(nr_instance):
             if scipy and isinstance(x, sparse.spmatrix):
                 indslice = slice(x.indptr[i], x.indptr[i+1])
-                xi, idx = gen_svm_nodearray((x.indices[indslice], x.data[indslice]), isKernel=(m.param.kernel_type == PRECOMPUTED))
+                xi, idx = gen_svm_nodearray((x.indices[indslice], x.data[indslice]), isKernel=(m.param.kernel_type == kernel_names.PRECOMPUTED))
             else:
-                xi, idx = gen_svm_nodearray(x[i], isKernel=(m.param.kernel_type == PRECOMPUTED))
+                xi, idx = gen_svm_nodearray(x[i], isKernel=(m.param.kernel_type == kernel_names.PRECOMPUTED))
             label = libsvm.svm_predict_values(m, xi, dec_values)
             if(nr_class == 1):
                 values = [1]
@@ -250,7 +254,7 @@ def svm_predict(y, x, m, options=""):
         y = [0] * nr_instance
     ACC, MSE, SCC = evaluations(y, pred_labels)
 
-    if svm_type in [EPSILON_SVR, NU_SVR]:
+    if svm_type in [svm_forms.EPSILON_SVR, svm_forms.NU_SVR]:
         info("Mean squared error = %g (regression)" % MSE)
         info("Squared correlation coefficient = %g (regression)" % SCC)
     else:

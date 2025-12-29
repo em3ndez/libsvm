@@ -1,25 +1,23 @@
-#!/usr/bin/env python
-
 from __future__ import print_function
 from array import array
 import sys
 
 try:
+    import numpy as np
     import scipy
     from scipy import sparse
 except:
     scipy = None
-    sparse = None
 
 
 __all__ = ['svm_read_problem', 'evaluations', 'csr_find_scale_param', 'csr_scale']
 
-def svm_read_problem(data_file_name, return_scipy=False):
+def svm_read_problem(data_source, return_scipy=False):
     """
-    svm_read_problem(data_file_name, return_scipy=False) -> [y, x], y: list, x: list of dictionary
-    svm_read_problem(data_file_name, return_scipy=True)  -> [y, x], y: ndarray, x: csr_matrix
+    svm_read_problem(data_source, return_scipy=False) -> [y, x], y: list, x: list of dictionary
+    svm_read_problem(data_source, return_scipy=True)  -> [y, x], y: ndarray, x: csr_matrix
 
-    Read LIBSVM-format data from data_file_name and return labels y
+    Read LIBSVM-format data from data_source and return labels y
     and data instances x.
     """
     if scipy != None and return_scipy:
@@ -33,35 +31,48 @@ def svm_read_problem(data_file_name, return_scipy=False):
         row_ptr = [0]
         col_idx = []
     indx_start = 1
-    for i, line in enumerate(open(data_file_name)):
-        line = line.split(None, 1)
-        # In case an instance with all zero features
-        if len(line) == 1: line += ['']
-        label, features = line
-        prob_y.append(float(label))
-        if scipy != None and return_scipy:
-            nz = 0
-            for e in features.split():
-                ind, val = e.split(":")
-                if ind == '0':
-                    indx_start = 0
-                val = float(val)
-                if val != 0:
-                    col_idx.append(int(ind)-indx_start)
-                    prob_x.append(val)
-                    nz += 1
-            row_ptr.append(row_ptr[-1]+nz)
-        else:
-            xi = {}
-            for e in features.split():
-                ind, val = e.split(":")
-                xi[int(ind)] = float(val)
-            prob_x += [xi]
+
+    if hasattr(data_source, "read"):
+        file = data_source
+    else:
+        file = open(data_source)
+    try:
+        for line in file:
+            line = line.split(None, 1)
+            # In case an instance with all zero features
+            if len(line) == 1: line += ['']
+            label, features = line
+            prob_y.append(float(label))
+            if scipy != None and return_scipy:
+                nz = 0
+                for e in features.split():
+                    ind, val = e.split(":")
+                    if ind == '0':
+                        indx_start = 0
+                    val = float(val)
+                    if val != 0:
+                        col_idx.append(int(ind)-indx_start)
+                        prob_x.append(val)
+                        nz += 1
+                row_ptr.append(row_ptr[-1]+nz)
+            else:
+                xi = {}
+                for e in features.split():
+                    ind, val = e.split(":")
+                    xi[int(ind)] = float(val)
+                prob_x += [xi]
+    except Exception as err_msg:
+        raise err_msg
+    finally:
+        if not hasattr(data_source, "read"):
+            # close file only if it was created by us
+            file.close()
+
     if scipy != None and return_scipy:
-        prob_y = scipy.frombuffer(prob_y, dtype='d')
-        prob_x = scipy.frombuffer(prob_x, dtype='d')
-        col_idx = scipy.frombuffer(col_idx, dtype='l')
-        row_ptr = scipy.frombuffer(row_ptr, dtype='l')
+        prob_y = np.frombuffer(prob_y, dtype='d')
+        prob_x = np.frombuffer(prob_x, dtype='d')
+        col_idx = np.frombuffer(col_idx, dtype='l')
+        row_ptr = np.frombuffer(row_ptr, dtype='l')
         prob_x = sparse.csr_matrix((prob_x, col_idx, row_ptr))
     return (prob_y, prob_x)
 
@@ -73,7 +84,7 @@ def evaluations_scipy(ty, pv):
     Calculate accuracy, mean squared error and squared correlation coefficient
     using the true values (ty) and predicted values (pv).
     """
-    if not (scipy != None and isinstance(ty, scipy.ndarray) and isinstance(pv, scipy.ndarray)):
+    if not (scipy != None and isinstance(ty, np.ndarray) and isinstance(pv, np.ndarray)):
         raise TypeError("type of ty and pv must be ndarray")
     if len(ty) != len(pv):
         raise ValueError("len(ty) must be equal to len(pv)")
@@ -85,7 +96,7 @@ def evaluations_scipy(ty, pv):
     sumvy = (pv*ty).sum()
     sumvv = (pv*pv).sum()
     sumyy = (ty*ty).sum()
-    with scipy.errstate(all = 'raise'):
+    with np.errstate(all = 'raise'):
         try:
             SCC = ((l*sumvy-sumv*sumy)*(l*sumvy-sumv*sumy))/((l*sumvv-sumv*sumv)*(l*sumyy-sumy*sumy))
         except:
@@ -102,7 +113,7 @@ def evaluations(ty, pv, useScipy = True):
     using the true values (ty) and predicted values (pv).
     """
     if scipy != None and useScipy:
-        return evaluations_scipy(scipy.asarray(ty), scipy.asarray(pv))
+        return evaluations_scipy(np.asarray(ty), np.asarray(pv))
     if len(ty) != len(pv):
         raise ValueError("len(ty) must be equal to len(pv)")
     total_correct = total_error = 0
@@ -160,8 +171,8 @@ def csr_scale(x, scale_param):
 
     if not n == len(coef):
         print("WARNING: The dimension of scaling parameters and feature number do not match.", file=sys.stderr)
-        coef = resize(coef, n)
-        offset = resize(offset, n)
+        coef = coef.resize(n) # zeros padded if n > len(coef)
+        offset = offset.resize(n)
 
     # scaled_x = x * diag(coef) + ones(l, 1) * offset'
     offset = sparse.csr_matrix(offset.reshape(1, n))
